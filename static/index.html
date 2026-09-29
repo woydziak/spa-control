@@ -31,9 +31,17 @@
           <div class="sub" id="endpoint">configured IP</div>
         </div>
       </div>
-      <div class="pill" title="Connection">
-        <span class="dot" id="dot"></span>
-        <span id="link">offline</span>
+      <div class="status-row">
+        <div class="pill" title="Connection">
+          <span class="dot" id="dot"></span>
+          <span id="link">offline</span>
+        </div>
+        <button type="button" class="reload" id="reload" aria-label="Reload page" title="Reload page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-2.6-6.3"/>
+            <path d="M21 3v6h-6"/>
+          </svg>
+        </button>
       </div>
     </header>
 
@@ -49,7 +57,21 @@
         <button class="setbtn" id="temp-up" aria-label="Raise set temperature">+</button>
       </div>
       <div class="clock" id="clock">Spa time <b>—</b></div>
+      <div class="clock tou-line hidden" id="tou-line"></div>
     </section>
+
+    <div id="tou-use" class="tou-use hidden">
+      <div class="tou-use-row">
+        <select id="tou-override-minutes" aria-label="How long to use the tub">
+          <option value="20" selected>20 min</option>
+          <option value="40">40 min</option>
+          <option value="60">60 min</option>
+        </select>
+        <button type="button" class="primary" id="tou-override-start">Use the tub</button>
+        <button type="button" class="ghost hidden" id="tou-override-end">End now</button>
+      </div>
+      <p class="hint">Releases the schedule's hold so the jets and heater can run. The jets still shut themselves off; press the pump again to restart one. Hold comes back when this ends if the expensive hours are still on.</p>
+    </div>
 
     <p class="err" id="error"></p>
     <p class="banner hidden" id="notice"></p>
@@ -58,6 +80,11 @@
       <div class="stat"><span>Heat <span class="tip" role="button" tabindex="0" data-tip="What the heater is doing right now. Heating means it is on. Heat waiting means it wants to heat, but a pump has to run first." aria-label="About heat">?</span></span><b id="heat">—</b></div>
       <div class="stat"><span>Mode <span class="tip" role="button" tabindex="0" data-tip="Ready heats whenever the water falls below the set temperature. Rest heats only during the filter cycle, which is quieter. Ready in rest heats now, then goes back to rest." aria-label="About heat mode">?</span></span><b id="mode">—</b></div>
       <div class="stat"><span>Range <span class="tip" role="button" tabindex="0" id="range-tip" data-tip="High is the normal soaking range. Low is a cooler band for when nobody is using the tub." aria-label="About temperature range">?</span></span><b id="range">—</b></div>
+    </div>
+
+    <div class="stat circ-stat" id="circ">
+      <span>Circulation <span class="tip" role="button" tabindex="0" data-tip="The continuous filtration pump. It usually stays on. Hold turns it off with the heater. This page only shows it." aria-label="About the circulation pump">?</span></span>
+      <b id="circ-state">—</b>
     </div>
 
     <div class="grid" id="controls">
@@ -110,6 +137,25 @@
         <button class="ghost" id="scan">Scan LAN (optional)</button>
       </div>
       <div class="msg" id="settings-msg"></div>
+    </details>
+
+    <details class="settings" id="tou-settings">
+      <summary>Rate schedule</summary>
+      <p class="hint">During these hours the spa is put on hold, so the heater and the pumps stay off, including filtration. Times use the clock of the machine running this service, not the spa panel. A hold you turn on yourself outside these hours is left alone. Turning this off, or leaving the current month off, releases a hold the schedule started. Use the tub, above the pumps, pauses that hold for 20, 40, or 60 minutes.</p>
+      <label class="check"><input type="checkbox" id="tou-enabled"> Hold the spa during expensive hours</label>
+      <div class="tou-label">Months</div>
+      <p class="hint">Only the months left on can start a hold. A summer rate is often May through September.</p>
+      <div id="tou-months" role="group" aria-label="Months"></div>
+      <div class="toolbar tou-month-actions">
+        <button type="button" class="ghost" id="tou-summer">May–September</button>
+        <button type="button" class="ghost" id="tou-all-year">All year</button>
+      </div>
+      <div id="tou-windows"></div>
+      <div class="toolbar">
+        <button type="button" class="ghost" id="tou-add">Add hours</button>
+        <button type="button" class="primary" id="tou-save">Save schedule</button>
+      </div>
+      <div class="msg" id="tou-msg"></div>
     </details>
   </div>
   <div id="tip-pop" class="tip-pop hidden" role="tooltip"></div>

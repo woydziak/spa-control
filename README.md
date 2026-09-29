@@ -10,6 +10,8 @@ The module address is not in the source tree. Copy `.env.example` to `.env` (or 
 
 Balboa now charges for BWA cloud connection. Remote control from outside the house used to be included with the Wi-Fi module; it is a paid subscription, and without it the official app only connects on the same network as the spa. This service is the workaround. A machine on the home LAN holds the connection to the module, and Tailscale is how the phone reaches the page when you are away. No Balboa account.
 
+It is also an energy-management tool for a time-of-use electric plan. On those plans the price of power jumps for a few hours of the day, and often only in the summer. The heater is the expensive load. A rate schedule presses the panel's Hold control during the hours and months you choose, so the heater and pumps stay off while the rate is high. A timer lets you use the tub during that window anyway; Hold comes back when the time ends.
+
 Local Connect has a separate failure. It broadcasts UDP `255.255.255.255:30303` on every launch and treats the reply source IP as the spa. A VPN (Proton on iOS especially) eats that broadcast, so the stock app reports “not found” even when the module answers ping and TCP 4257.
 
 The service keeps a single TCP session to the module on port 4257 and serves the page on the container’s Tailscale address. The phone only needs Tailscale, not LAN broadcasts.
@@ -20,6 +22,8 @@ The service keeps a single TCP session to the module on port 4257 and serves the
 - Raise / lower set temperature
 - Toggle pumps. A two-speed pump steps off → speed 1 → speed 2 → off; a one-speed pump is on or off. Pump 1 defaults to two-speed.
 - Lights, blower, heat mode (Ready / Rest), high/low range, hold
+- Circulation pump status. The page does not switch that pump; Hold is what stops it.
+- A rate schedule for a time-of-use plan. It presses Hold during the hours and months you set, so the heater and pumps stay off. It is off until you turn it on. A hold you set by hand outside those hours is not cleared. Use the tub pauses that hold for 20, 40, or 60 minutes. Times follow the machine running the service.
 - Spa clock, as reported by the panel
 - Push the spa clock to the container’s local time
 - Change the persisted module IP without rebuilding

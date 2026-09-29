@@ -107,6 +107,9 @@ function render(st) {
   $("heat").textContent = stateText("heat", st.heat_state);
   $("mode").textContent = stateText("mode", st.heat_mode);
   $("range").textContent = stateText("range", st.temp_range);
+  const circKnown = !!(st.connected || st.last_update);
+  $("circ-state").textContent = circKnown ? stateText("circ", st.circ || "off") : "—";
+  $("circ").classList.toggle("on", circKnown && st.circ === "on");
   const rangeText = rangeTip(st);
   $("range-tip").dataset.tip = rangeText;
   $("range-ctrl-tip").dataset.tip = rangeText;
@@ -145,6 +148,21 @@ function render(st) {
     btn.classList.toggle("on", controlOn(item, val));
   });
   applyPumpTips();
+  const tou = st.tou || {};
+  const line = $("tou-line");
+  line.textContent = tou.summary || "";
+  line.classList.toggle("hidden", !tou.summary);
+  const soaking = !!tou.override_until;
+  $("tou-use").classList.toggle("hidden", !(tou.enabled || soaking));
+  $("tou-override-end").classList.toggle("hidden", !soaking);
+  const holdTip = document.querySelector('[data-item="hold"] .tip');
+  if (holdTip) {
+    holdTip.dataset.tip = soaking
+      ? "A soak timer is running, so the schedule will not turn hold back on until it ends."
+      : tou.enabled && tou.active
+        ? "The rate schedule is keeping hold on through these hours, so the heater and pumps stay off. Turning hold off here turns it back on at the next check. Use the tub to pause that for 20, 40, or 60 minutes."
+        : "Pauses heating and filtration. Tap again to resume. The water will cool until you turn hold off.";
+  }
 }
 
 async function api(path, opts) {
@@ -231,8 +249,131 @@ async function loadConfig() {
   $("p3-speeds").value = String(cfg.pump3_speeds === 2 ? 2 : 1);
   $("pump3").classList.toggle("hidden", cfg.show_pump3 === false);
   $("blower").classList.toggle("hidden", cfg.show_blower === false);
+  $("tou-enabled").checked = !!cfg.tou_enabled;
+  renderMonths(cfg.tou_months);
+  renderWindows(cfg.tou_windows || []);
   applyPumpTips();
   return cfg;
+}
+
+const DAY_LABELS = [
+  ["M", "Monday"],
+  ["T", "Tuesday"],
+  ["W", "Wednesday"],
+  ["T", "Thursday"],
+  ["F", "Friday"],
+  ["S", "Saturday"],
+  ["S", "Sunday"],
+];
+
+const MONTH_LABELS = [
+  ["Jan", "January"],
+  ["Feb", "February"],
+  ["Mar", "March"],
+  ["Apr", "April"],
+  ["May", "May"],
+  ["Jun", "June"],
+  ["Jul", "July"],
+  ["Aug", "August"],
+  ["Sep", "September"],
+  ["Oct", "October"],
+  ["Nov", "November"],
+  ["Dec", "December"],
+];
+const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+const SUMMER_MONTHS = [5, 6, 7, 8, 9];
+
+function renderMonths(months) {
+  const selected = new Set(
+    (Array.isArray(months) && months.length ? months : ALL_MONTHS).map(Number)
+  );
+  const root = $("tou-months");
+  root.replaceChildren();
+  MONTH_LABELS.forEach(([label, name], index) => {
+    const month = index + 1;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "month";
+    button.dataset.month = String(month);
+    button.setAttribute("aria-pressed", selected.has(month) ? "true" : "false");
+    button.setAttribute("aria-label", name);
+    button.textContent = label;
+    root.appendChild(button);
+  });
+}
+
+function readMonths() {
+  return [...document.querySelectorAll("#tou-months .month[aria-pressed='true']")].map(
+    (button) => Number(button.dataset.month)
+  );
+}
+
+function setMonths(months) {
+  const selected = new Set(months);
+  document.querySelectorAll("#tou-months .month").forEach((button) => {
+    const on = selected.has(Number(button.dataset.month));
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+function renderWindows(windows) {
+  const root = $("tou-windows");
+  root.replaceChildren();
+  windows.forEach((entry) => root.appendChild(windowRow(entry)));
+}
+
+function timeField(labelText, className, value) {
+  const wrap = document.createElement("div");
+  const label = document.createElement("label");
+  label.textContent = labelText;
+  const input = document.createElement("input");
+  input.className = className;
+  input.type = "time";
+  input.required = true;
+  input.value = value || "16:00";
+  wrap.append(label, input);
+  return wrap;
+}
+
+function windowRow(entry) {
+  const row = document.createElement("div");
+  row.className = "tou-window";
+  const days = new Set((entry.days || [0, 1, 2, 3, 4, 5, 6]).map(Number));
+  const times = document.createElement("div");
+  times.className = "tou-times";
+  times.append(timeField("From", "tou-start", entry.start), timeField("Until", "tou-end", entry.end));
+  const dayRow = document.createElement("div");
+  dayRow.className = "tou-days";
+  dayRow.innerHTML = DAY_LABELS.map(([label, name], day) => {
+    const pressed = days.has(day) ? "true" : "false";
+    return `<button type="button" class="day" data-day="${day}" aria-pressed="${pressed}" aria-label="${name}">${label}</button>`;
+  }).join("");
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "ghost tou-remove";
+  remove.textContent = "Remove";
+  // A focused time field on iOS spends the first tap dismissing itself.
+  // Handling the touch here makes Remove run on that tap.
+  remove.addEventListener("touchend", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    removeWindow(row);
+  });
+  remove.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    removeWindow(row);
+  });
+  row.append(times, dayRow, remove);
+  return row;
+}
+
+function readWindows() {
+  return [...document.querySelectorAll(".tou-window")].map((row) => ({
+    start: row.querySelector(".tou-start").value,
+    end: row.querySelector(".tou-end").value,
+    days: [...row.querySelectorAll(".day[aria-pressed='true']")].map((button) => Number(button.dataset.day)),
+  }));
 }
 
 async function boot() {
@@ -269,6 +410,7 @@ async function boot() {
   connectWs();
 }
 
+$("reload").onclick = () => location.reload();
 $("temp-up").onclick = () => nudge(1);
 $("temp-down").onclick = () => nudge(-1);
 $("controls").onclick = async (ev) => {
@@ -281,6 +423,10 @@ $("controls").onclick = async (ev) => {
     $("error").textContent = err.message;
   }
 };
+$("tou-override-start").onclick = () => command("tou_override", {
+  minutes: Number($("tou-override-minutes").value),
+}).catch((e) => ($("error").textContent = e.message));
+$("tou-override-end").onclick = () => command("tou_override_end").catch((e) => ($("error").textContent = e.message));
 $("sync-time").onclick = () => command("set_time").catch((e) => ($("error").textContent = e.message));
 $("reconnect").onclick = () => command("reconnect").catch((e) => ($("error").textContent = e.message));
 $("save").onclick = async () => {
@@ -306,6 +452,97 @@ $("save").onclick = async () => {
   } catch (err) {
     $("settings-msg").textContent = err.message;
   }
+};
+let scheduleWrite = Promise.resolve();
+
+function enqueueScheduleWrite(task) {
+  const run = scheduleWrite.then(task, task);
+  scheduleWrite = run.then(() => {}, () => {});
+  return run;
+}
+
+function removeWindow(row) {
+  if (!row.isConnected) return;
+  row.remove();
+  // Saved immediately. Leaving this until the next Save let a reload
+  // rebuild the row, which is what made a new block look undeletable.
+  // Months ride along so the chips on screen are the ones stored.
+  // The on/off checkbox does not: Remove must not arm the schedule.
+  const windows = readWindows();
+  const months = readMonths();
+  return enqueueScheduleWrite(async () => {
+    $("tou-msg").textContent = "Saving…";
+    try {
+      const saved = await api("/api/config", {
+        method: "PUT",
+        body: JSON.stringify({ tou_windows: windows, tou_months: months }),
+      });
+      if (state.cfg) {
+        state.cfg.tou_windows = saved.tou_windows;
+        state.cfg.tou_months = saved.tou_months;
+      }
+      renderWindows(saved.tou_windows || []);
+      $("tou-msg").textContent = "Removed.";
+    } catch (err) {
+      try {
+        await loadConfig();
+      } catch (_) {
+        /* keep the save error */
+      }
+      $("tou-msg").textContent = err.message;
+    }
+  });
+}
+
+$("tou-months").onclick = (ev) => {
+  const target = ev.target instanceof Element ? ev.target : ev.target.parentElement;
+  const month = target && target.closest(".month");
+  if (!month || !$("tou-months").contains(month)) return;
+  const turningOff = month.getAttribute("aria-pressed") === "true";
+  if (turningOff && readMonths().length === 1) {
+    $("tou-msg").textContent = "Leave at least one month on. Turn the schedule off if it should never run.";
+    return;
+  }
+  month.setAttribute("aria-pressed", turningOff ? "false" : "true");
+};
+$("tou-summer").onclick = () => setMonths(SUMMER_MONTHS);
+$("tou-all-year").onclick = () => setMonths(ALL_MONTHS);
+$("tou-windows").onclick = (ev) => {
+  const target = ev.target instanceof Element ? ev.target : ev.target.parentElement;
+  const day = target && target.closest(".day");
+  if (!day || !$("tou-windows").contains(day)) return;
+  day.setAttribute("aria-pressed", day.getAttribute("aria-pressed") === "true" ? "false" : "true");
+};
+$("tou-add").onclick = () => {
+  if (document.querySelectorAll(".tou-window").length >= 8) {
+    $("tou-msg").textContent = "Eight windows is the limit.";
+    return;
+  }
+  $("tou-windows").appendChild(windowRow({
+    start: "16:00",
+    end: "21:00",
+    days: [0, 1, 2, 3, 4],
+  }));
+};
+$("tou-save").onclick = () => {
+  const payload = {
+    tou_enabled: $("tou-enabled").checked,
+    tou_windows: readWindows(),
+    tou_months: readMonths(),
+  };
+  return enqueueScheduleWrite(async () => {
+    $("tou-msg").textContent = "Saving…";
+    try {
+      await api("/api/config", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      await loadConfig();
+      $("tou-msg").textContent = "Saved. The schedule uses this machine's clock.";
+    } catch (err) {
+      $("tou-msg").textContent = err.message;
+    }
+  });
 };
 $("scan").onclick = async () => {
   $("settings-msg").textContent = "Broadcasting UDP 30303…";

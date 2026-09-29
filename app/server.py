@@ -54,7 +54,8 @@ def file_response(path: Path) -> tuple[int, dict[str, str], bytes]:
         return 404, {"Content-Type": "text/plain"}, b"not found"
     data = path.read_bytes()
     ctype = STATIC_TYPES.get(path.suffix, "application/octet-stream")
-    return 200, {"Content-Type": ctype, "Cache-Control": "no-cache"}, data
+    # Home-screen iOS keeps a stale copy when this is only "no-cache".
+    return 200, {"Content-Type": ctype, "Cache-Control": "no-store"}, data
 
 
 async def read_request(reader: asyncio.StreamReader) -> dict[str, Any] | None:

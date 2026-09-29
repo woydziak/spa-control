@@ -296,6 +296,7 @@ class SpaClient:
             st.heat_state = "off"
         st.temp_range = st.temp_range or "high"
         st.spa_state = "hold" if st.hold else "running"
+        st.circ = "off" if st.hold else "on"
         st.model = st.model or "MS40E (mock)"
         now = datetime.now()
         st.hour, st.minute = now.hour, now.minute
@@ -339,6 +340,7 @@ class SpaClient:
             if field == "hold":
                 st.hold = not st.hold
                 st.spa_state = "hold" if st.hold else "running"
+                st.circ = "off" if st.hold else "on"
             elif field == "temp_range":
                 st.temp_range = "low" if st.temp_range == "high" else "high"
                 if st.temp_range == "low":

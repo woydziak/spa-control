@@ -13,6 +13,14 @@ from typing import Any
 from . import config as cfgmod
 from .client import SpaClient
 from .discovery import scan
+from .schedule import (
+    ScheduleError,
+    HoldScheduler,
+    describe,
+    months_from_config,
+    override_deadline,
+    windows_from_config,
+)
 from .server import WebApp, json_response, ws_encode, ws_read
 from .state import Runtime, clear_live
 
@@ -26,10 +34,15 @@ ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 SESSIONS: set[str] = set()
 runtime = Runtime()
-client = SpaClient(runtime.status, on_update=lambda _s: broadcast())
+current_cfg: dict[str, Any] = {}
+scheduler = HoldScheduler()
+rate_wake = asyncio.Event()
+client = SpaClient(runtime.status, on_update=lambda _s: on_status())
 
 
 def apply_config(cfg: dict[str, Any]) -> None:
+    current_cfg.clear()
+    current_cfg.update(cfg)
     st = runtime.status
     host = str(cfg["host"])
     port = int(cfg["port"])
@@ -44,9 +57,36 @@ def apply_config(cfg: dict[str, Any]) -> None:
         clear_live(st)
 
 
+def on_status():
+    # While a window can change hold, follow status so a minute boundary
+    # or a manual press is handled without waiting out the slow tick.
+    if current_cfg.get("tou_enabled") or scheduler.owning:
+        rate_wake.set()
+    return broadcast()
+
+
+def status_payload() -> dict[str, Any]:
+    data = runtime.snapshot()
+    when = datetime.now().astimezone()
+    try:
+        windows = windows_from_config(current_cfg.get("tou_windows") or [])
+        months = months_from_config(current_cfg.get("tou_months"))
+        data["tou"] = describe(
+            bool(current_cfg.get("tou_enabled")),
+            windows,
+            when,
+            hour24=bool(runtime.status.time_24h),
+            months=months,
+            override_until=_live_override(when),
+        )
+    except ScheduleError:
+        data["tou"] = {"enabled": False, "active": False, "summary": "Rate schedule could not be read."}
+    return data
+
+
 async def broadcast() -> None:
     dead = []
-    payload = runtime.snapshot()
+    payload = status_payload()
     message = ws_encode(__import__("json").dumps({"type": "status", "data": payload}))
     for writer in list(runtime.subscribers):
         try:
@@ -71,7 +111,7 @@ async def health(_req):
 
 
 async def api_status(_req):
-    return json_response(runtime.snapshot())
+    return json_response(status_payload())
 
 
 async def api_config_get(_req):
@@ -95,12 +135,20 @@ async def api_config_put(req):
             "pump1_speeds",
             "pump2_speeds",
             "pump3_speeds",
+            "tou_enabled",
+            "tou_windows",
+            "tou_months",
         )
         if k in body
     }
     cfg = cfgmod.save(allowed)
     apply_config(cfg)
-    await client.reconnect()
+    # Connection edits drop the socket. A schedule edit must not, or saving
+    # hours would interrupt the session the schedule is about to command.
+    if set(allowed) <= {"tou_enabled", "tou_windows", "tou_months"}:
+        rate_wake.set()
+    else:
+        await client.reconnect()
     return json_response(cfgmod.public_view(cfg))
 
 
@@ -139,6 +187,20 @@ async def api_command(req):
         await client.send_time(now.hour, now.minute)
     elif action == "reconnect":
         await client.reconnect()
+    elif action == "tou_override":
+        if not current_cfg.get("tou_enabled"):
+            return json_response({"detail": "Turn the rate schedule on first."}, 400)
+        try:
+            until = override_deadline(datetime.now().astimezone(), body.get("minutes"))
+        except ScheduleError as exc:
+            return json_response({"detail": str(exc)}, 400)
+        cfgmod.write_tou_override(until)
+        rate_wake.set()
+        await broadcast()
+    elif action == "tou_override_end":
+        cfgmod.write_tou_override(None)
+        rate_wake.set()
+        await broadcast()
     else:
         return json_response({"detail": f"unknown action {action}"}, 400)
     return json_response({"ok": True})
@@ -147,7 +209,7 @@ async def api_command(req):
 async def ws_handler(reader, writer):
     runtime.subscribers.add(writer)
     try:
-        writer.write(ws_encode(__import__("json").dumps({"type": "status", "data": runtime.snapshot()})))
+        writer.write(ws_encode(__import__("json").dumps({"type": "status", "data": status_payload()})))
         await writer.drain()
         while True:
             msg = await ws_read(reader)
@@ -188,6 +250,9 @@ async def amain() -> None:
         except Exception as exc:
             log.info("optional scan skipped: %s", exc)
     client.start()
+    scheduler.owning = cfgmod.read_tou_owning()
+    rate_task = asyncio.create_task(rate_loop(), name="spa-rates")
+    ticker = asyncio.create_task(rate_ticker(), name="spa-rates-tick")
     app = WebApp(STATIC, ROUTES, ws_handler)
     host = cfg.get("bind") or "0.0.0.0"
     port = int(cfg.get("http_port") or 8080)
@@ -197,7 +262,94 @@ async def amain() -> None:
         async with server:
             await server.serve_forever()
     finally:
+        rate_task.cancel()
+        ticker.cancel()
+        for task in (rate_task, ticker):
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         await client.stop()
+
+
+def _status_is_fresh(max_age: float = 30) -> bool:
+    stamp = runtime.status.last_update
+    if not runtime.status.connected or not stamp:
+        return False
+    try:
+        seen = datetime.fromisoformat(stamp)
+    except ValueError:
+        return False
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    age = (datetime.now(seen.tzinfo) - seen).total_seconds()
+    return 0 <= age <= max_age
+
+
+async def reconcile_rates() -> None:
+    when = datetime.now().astimezone()
+    try:
+        windows = windows_from_config(current_cfg.get("tou_windows") or [])
+        months = months_from_config(current_cfg.get("tou_months"))
+    except ScheduleError as exc:
+        log.warning("rate schedule ignored: %s", exc)
+        return
+    before = scheduler.owning
+    action = scheduler.step(
+        enabled=bool(current_cfg.get("tou_enabled")),
+        windows=windows,
+        months=months,
+        when=when,
+        actual_hold=bool(runtime.status.hold),
+        fresh=_status_is_fresh(),
+        override_until=_live_override(when),
+    )
+    if scheduler.owning != before or scheduler.owning != cfgmod.read_tou_owning():
+        cfgmod.write_tou_owning(scheduler.owning)
+    if action != "toggle":
+        return
+    log.info("rate schedule pressing hold (want %s)", "on" if scheduler.pending else "off")
+    try:
+        await client.send_toggle("hold")
+    except Exception as exc:
+        log.warning("rate schedule could not press hold: %s", exc)
+        scheduler.pending = None
+        scheduler.pending_at = None
+
+
+async def rate_loop() -> None:
+    while True:
+        await rate_wake.wait()
+        rate_wake.clear()
+        try:
+            await reconcile_rates()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("rate schedule failed")
+        # Status arrives about once a second. Fold that burst into one check.
+        await asyncio.sleep(1)
+
+
+async def rate_ticker() -> None:
+    while True:
+        rate_wake.set()
+        delay = 15.0
+        until = cfgmod.read_tou_override()
+        if until is not None:
+            remaining = (until - datetime.now().astimezone()).total_seconds()
+            # Wake when the soak ends instead of waiting out the slow tick.
+            if remaining < 15:
+                delay = max(1.0, remaining + 0.5)
+        await asyncio.sleep(delay)
+
+
+def _live_override(when: datetime) -> datetime | None:
+    until = cfgmod.read_tou_override()
+    if until is not None and when >= until:
+        cfgmod.write_tou_override(None)
+        return None
+    return until
 
 
 def run() -> None:
