@@ -1,0 +1,25 @@
+[Unit]
+Description=Local Balboa spa control web service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=spa
+Group=spa
+WorkingDirectory=/opt/spa-control
+# Module address, MAC, and PIN live here. The leading - means a missing
+# file does not stop the unit from loading; the app then refuses to start
+# until SPA_HOST is set.
+EnvironmentFile=-/etc/spa-control.env
+Environment=SPA_CONFIG=/var/lib/spa-control/config.json
+Environment=PYTHONUNBUFFERED=1
+# "Set spa clock" writes this container's local time. Set it with
+# timedatectl set-timezone <Area/City> or SPA_TZ= when installing.
+ExecStart=/usr/bin/python3 -m app.main
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#071018">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Spa Control</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="icon" href="/static/icon.svg">
+  <link rel="apple-touch-icon" href="/static/icon.svg">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div id="gate" class="gate hidden">
+    <h1>Spa Control</h1>
+    <p class="sub">Enter the PIN for this service.</p>
+    <label for="pin">PIN</label>
+    <input id="pin" type="password" inputmode="numeric" autocomplete="one-time-code">
+    <p class="err" id="gate-err"></p>
+    <button class="primary" id="unlock" style="width:100%;margin-top:12px">Unlock</button>
+  </div>
+
+  <div id="app" class="app">
+    <header>
+      <div class="brand">
+        <img class="logo" src="/static/icon.svg" alt="">
+        <div>
+          <h1 id="label">Spa</h1>
+          <div class="sub" id="endpoint">configured IP</div>
+        </div>
+      </div>
+      <div class="pill" title="Connection">
+        <span class="dot" id="dot"></span>
+        <span id="link">offline</span>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="hero-label">Water</div>
+      <div class="temp" id="current">--<small>°F</small></div>
+      <div class="setrow">
+        <button class="setbtn" id="temp-down" aria-label="Lower set temperature">−</button>
+        <div class="set-temp">
+          <span>set to</span>
+          <div id="setpoint">--°</div>
+        </div>
+        <button class="setbtn" id="temp-up" aria-label="Raise set temperature">+</button>
+      </div>
+      <div class="clock" id="clock">Spa time <b>—</b></div>
+    </section>
+
+    <p class="err" id="error"></p>
+    <p class="banner hidden" id="notice"></p>
+
+    <div class="meta">
+      <div class="stat"><span>Heat <span class="tip" role="button" tabindex="0" data-tip="What the heater is doing right now. Heating means it is on. Heat waiting means it wants to heat, but a pump has to run first." aria-label="About heat">?</span></span><b id="heat">—</b></div>
+      <div class="stat"><span>Mode <span class="tip" role="button" tabindex="0" data-tip="Ready heats whenever the water falls below the set temperature. Rest heats only during the filter cycle, which is quieter. Ready in rest heats now, then goes back to rest." aria-label="About heat mode">?</span></span><b id="mode">—</b></div>
+      <div class="stat"><span>Range <span class="tip" role="button" tabindex="0" id="range-tip" data-tip="High is the normal soaking range. Low is a cooler band for when nobody is using the tub." aria-label="About temperature range">?</span></span><b id="range">—</b></div>
+    </div>
+
+    <div class="grid" id="controls">
+      <button class="ctrl" data-item="pump1"><div class="name">Pump 1 <span class="tip" role="button" tabindex="0" data-tip="Each tap moves one step: Off, Speed 1, Speed 2, then back to Off." aria-label="About pump 1">?</span></div><div class="state" data-state>off</div></button>
+      <button class="ctrl" data-item="pump2"><div class="name">Pump 2 <span class="tip" role="button" tabindex="0" data-tip="Each tap turns this pump on or off." aria-label="About pump 2">?</span></div><div class="state" data-state>off</div></button>
+      <button class="ctrl" data-item="pump3" id="pump3"><div class="name">Pump 3 <span class="tip" role="button" tabindex="0" data-tip="Each tap turns this pump on or off." aria-label="About pump 3">?</span></div><div class="state" data-state>off</div></button>
+      <button class="ctrl" data-item="light"><div class="name">Lights <span class="tip" role="button" tabindex="0" data-tip="Each tap turns the lights on or off." aria-label="About lights">?</span></div><div class="state" data-state>off</div></button>
+      <button class="ctrl" data-item="blower" id="blower"><div class="name">Blower <span class="tip" role="button" tabindex="0" data-tip="Each tap turns the blower on or off." aria-label="About blower">?</span></div><div class="state" data-state>off</div></button>
+      <button class="ctrl heat" data-item="heat_mode"><div class="name">Heat mode <span class="tip" role="button" tabindex="0" data-tip="Tap to switch Ready and Rest. Ready keeps the water hot all the time. Rest heats only during the filter cycle." aria-label="About heat mode control">?</span></div><div class="state" data-state>ready</div></button>
+      <button class="ctrl" data-item="temp_range"><div class="name">Temp range <span class="tip" role="button" tabindex="0" id="range-ctrl-tip" data-tip="Tap to switch the allowed temperature band. High is for soaking. Low is for when the tub is not in use." aria-label="About temperature range control">?</span></div><div class="state" data-state>high</div></button>
+      <button class="ctrl" data-item="hold"><div class="name">Hold <span class="tip" role="button" tabindex="0" data-tip="Pauses heating and filtration. Tap again to resume. The water will cool until you turn hold off." aria-label="About hold">?</span></div><div class="state" data-state>off</div></button>
+    </div>
+
+    <div class="toolbar">
+      <button class="ghost" id="sync-time">Set spa clock to now</button>
+      <button class="ghost" id="reconnect">Reconnect</button>
+    </div>
+
+    <details class="settings">
+      <summary>Connection settings</summary>
+      <label for="host">Spa module IP (persisted — used even if broadcast fails)</label>
+      <input id="host" type="text" placeholder="192.0.2.10" autocomplete="off">
+      <label for="port">TCP port</label>
+      <input id="port" type="number" value="4257">
+      <label for="mac">Expected MAC (optional filter)</label>
+      <input id="mac" type="text" placeholder="00:15:27:00:00:00">
+      <label for="name">Label</label>
+      <input id="name" type="text" placeholder="Spa">
+      <label class="check"><input type="checkbox" id="mock"> Mock mode (no hardware)</label>
+      <label class="check"><input type="checkbox" id="show-p3"> Show pump 3</label>
+      <label class="check"><input type="checkbox" id="show-blower"> Show blower</label>
+      <p class="hint">Pump steps follow the buttons on the panel. A two-speed pump cycles Off, Speed 1, then Speed 2. A one-speed pump is only on or off.</p>
+      <label for="p1-speeds">Pump 1</label>
+      <select id="p1-speeds">
+        <option value="2">Off / speed 1 / speed 2</option>
+        <option value="1">On / off</option>
+      </select>
+      <label for="p2-speeds">Pump 2</label>
+      <select id="p2-speeds">
+        <option value="1">On / off</option>
+        <option value="2">Off / speed 1 / speed 2</option>
+      </select>
+      <label for="p3-speeds">Pump 3</label>
+      <select id="p3-speeds">
+        <option value="1">On / off</option>
+        <option value="2">Off / speed 1 / speed 2</option>
+      </select>
+      <div class="toolbar">
+        <button class="primary" id="save">Save & reconnect</button>
+        <button class="ghost" id="scan">Scan LAN (optional)</button>
+      </div>
+      <div class="msg" id="settings-msg"></div>
+    </details>
+  </div>
+  <div id="tip-pop" class="tip-pop hidden" role="tooltip"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

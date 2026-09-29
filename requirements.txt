@@ -1,0 +1,2 @@
+# No third-party packages. Python 3.11+ stdlib only.
+# This file is kept so a venv install is a no-op if you still want one.
