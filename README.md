@@ -8,9 +8,11 @@ The module address is not in the source tree. Copy `.env.example` to `.env` (or 
 
 ## Why this exists
 
-Official BWA Local Connect broadcasts UDP `255.255.255.255:30303` on every launch and treats the reply source IP as the spa. A VPN (Proton on iOS especially) eats that broadcast, so the stock app reports “not found” even when the module answers ping and TCP 4257. Cloud Connect is the paid remote path.
+Balboa now charges for BWA cloud connection. Remote control from outside the house used to be included with the Wi-Fi module; it is a paid subscription, and without it the official app only connects on the same network as the spa. This service is the workaround. A machine on the home LAN holds the connection to the module, and Tailscale is how the phone reaches the page when you are away. No Balboa account.
 
-This service lives on an always-on LXC next to the spa, keeps a single TCP session to the module on port 4257, and exposes HTTPS-free HTTP on the container’s Tailscale address. Your phone only needs Tailscale, not LAN broadcasts.
+Local Connect has a separate failure. It broadcasts UDP `255.255.255.255:30303` on every launch and treats the reply source IP as the spa. A VPN (Proton on iOS especially) eats that broadcast, so the stock app reports “not found” even when the module answers ping and TCP 4257.
+
+The service keeps a single TCP session to the module on port 4257 and serves the page on the container’s Tailscale address. The phone only needs Tailscale, not LAN broadcasts.
 
 ## What you can do from the phone
 
