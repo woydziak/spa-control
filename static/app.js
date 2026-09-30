@@ -100,7 +100,14 @@ function render(st) {
   const unit = st.unit || "F";
   $("label").textContent = st.label || "Spa";
   $("endpoint").textContent = `${st.mode || "configured_ip"} · ${st.host}:${st.port}`;
-  $("current").innerHTML = `${fmtTemp(st.current_temp, unit)}<small>°${unit}</small>`;
+  const current = $("current");
+  if (st.hold) {
+    current.textContent = "Hold";
+    current.classList.add("held");
+  } else {
+    current.classList.remove("held");
+    current.innerHTML = `${fmtTemp(st.current_temp, unit)}<small>°${unit}</small>`;
+  }
   const shown = state.pendingTemp ?? st.set_temp;
   $("setpoint").textContent = `${fmtTemp(shown, unit)}°`;
   $("clock").innerHTML = `Spa time <b>${fmtClock(st)}</b>`;

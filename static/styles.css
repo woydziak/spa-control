@@ -109,6 +109,7 @@ h1 { font-size: 1.15rem; margin: 0; font-weight: 650; letter-spacing: 0.01em; }
   letter-spacing: -0.04em;
 }
 .temp small { font-size: 2rem; color: var(--muted); margin-left: 2px; }
+.temp.held { font-size: 4.6rem; letter-spacing: 0; }
 .setrow {
   display: flex;
   align-items: center;
