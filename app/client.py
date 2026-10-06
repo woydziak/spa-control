@@ -19,6 +19,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _backoff_delay(attempt: int) -> float:
+    """Seconds before the next dial.
+
+    The shift is capped before it is added to a float. ``2**1024`` cannot
+    be converted to float, and that OverflowError used to end the reconnect
+    loop after about eleven hours of unanswered dials.
+    """
+    return min(2 ** min(attempt, 5) + random.random(), 30.0)
+
+
 class SpaClient:
     def __init__(self, status: SpaStatus, on_update: Listener | None = None) -> None:
         self.status = status
@@ -99,47 +109,69 @@ class SpaClient:
     async def _run(self) -> None:
         attempt = 0
         while not self._stop.is_set():
-            if self.status.mode == "mock":
-                await self._mock_loop()
-                continue
-            generation = self._generation
             try:
-                await self._connect(generation)
-                if self._generation != generation or self.status.mode == "mock":
-                    await self._close()
-                    continue
-                attempt = 0
-                await self.request_info()
-                await self._read_loop()
+                attempt = await self._cycle(attempt)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except Exception:
+                # The run task is kept on self._task, so an exception here
+                # would sit unlogged and the spa would stay offline.
+                log.exception("spa client loop failed")
                 self.status.connected = False
-                if self._drop_reason == "reconnect":
-                    self.status.last_error = ""
-                else:
-                    self.status.last_error = str(exc)
-                    log.warning("spa link down: %s", exc)
+                self.status.last_error = "client loop failed"
                 self._schedule_emit()
-            await self._close()
-            if self._stop.is_set():
-                break
-            if self._wake.is_set() or self._drop_reason == "reconnect":
-                self._wake.clear()
-                self._drop_reason = None
                 attempt = 0
-                continue
-            delay = min(2**attempt + random.random(), 30)
-            attempt += 1
-            log.info("reconnect in %.1fs (attempt %s)", delay, attempt)
-            try:
-                await asyncio.wait_for(self._wake.wait(), timeout=delay)
-            except asyncio.TimeoutError:
-                pass
+                try:
+                    await asyncio.wait_for(self._wake.wait(), timeout=2)
+                except asyncio.TimeoutError:
+                    pass
+                else:
+                    self._wake.clear()
+                    self._drop_reason = None
+
+    async def _cycle(self, attempt: int) -> int:
+        if self.status.mode == "mock":
+            await self._mock_loop()
+            return attempt
+        generation = self._generation
+        try:
+            await self._connect(generation)
+            if self._generation != generation or self.status.mode == "mock":
+                await self._close()
+                return attempt
+            attempt = 0
+            await self.request_info()
+            await self._read_loop()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.status.connected = False
+            if self._drop_reason == "reconnect":
+                self.status.last_error = ""
             else:
-                self._wake.clear()
-                self._drop_reason = None
-                attempt = 0
+                message = str(exc).strip() or type(exc).__name__
+                self.status.last_error = message
+                log.warning("spa link down: %s", message)
+            self._schedule_emit()
+        await self._close()
+        if self._stop.is_set():
+            return attempt
+        if self._wake.is_set() or self._drop_reason == "reconnect":
+            self._wake.clear()
+            self._drop_reason = None
+            return 0
+        delay = _backoff_delay(attempt)
+        attempt += 1
+        log.info("reconnect in %.1fs (attempt %s)", delay, attempt)
+        try:
+            await asyncio.wait_for(self._wake.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass
+        else:
+            self._wake.clear()
+            self._drop_reason = None
+            return 0
+        return attempt
 
     async def _connect(self, generation: int) -> None:
         host, port = self.status.host, self.status.port
@@ -152,6 +184,8 @@ class SpaClient:
         )
         try:
             reader, writer = await self._connect_task
+        except asyncio.TimeoutError as exc:
+            raise ConnectionError(f"timed out connecting to {host}:{port}") from exc
         except asyncio.CancelledError:
             current = asyncio.current_task()
             if current is not None and current.cancelling():

@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import config as cfgmod
-from app.client import SpaClient
+from app.client import SpaClient, _backoff_delay
 from app.protocol import FrameAssembler, build_frame, encode_setpoint, set_temp_frame
 from app.schedule import (
     HoldScheduler,
@@ -213,6 +213,14 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(list(Path(self._dir.name).glob("*.tmp")))
 
 
+class BackoffTests(unittest.TestCase):
+    def test_long_outage_stays_within_thirty_seconds(self) -> None:
+        for attempt in (0, 1, 4, 5, 6, 1023, 1024, 10**6):
+            delay = _backoff_delay(attempt)
+            self.assertGreater(delay, 0)
+            self.assertLessEqual(delay, 30)
+
+
 class ClearLiveTests(unittest.TestCase):
     def test_host_change_forgets_the_previous_pumps(self) -> None:
         status = SpaStatus(host="192.0.2.10", pump1="high", current_temp=100, set_temp=102, connected=True)
@@ -266,6 +274,78 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
             await client.stop()
             elapsed = asyncio.get_running_loop().time() - began
         self.assertLess(elapsed, 2)
+
+    async def test_connect_timeout_names_the_module(self) -> None:
+        async def open_connection(host, port):
+            raise TimeoutError()
+
+        status = SpaStatus(host="192.0.2.10", port=4257, mode="configured_ip")
+        client = SpaClient(status)
+        with patch("asyncio.open_connection", open_connection), patch(
+            "app.client._backoff_delay", return_value=30
+        ):
+            client.start()
+            for _ in range(50):
+                if status.last_error:
+                    break
+                await asyncio.sleep(0.02)
+            await client.stop()
+        self.assertEqual(status.last_error, "timed out connecting to 192.0.2.10:4257")
+
+    async def test_retries_past_the_backoff_that_used_to_overflow(self) -> None:
+        calls = 0
+        seen: list[int] = []
+
+        async def open_connection(host, port):
+            nonlocal calls
+            calls += 1
+            raise OSError("refused")
+
+        def spy(attempt: int) -> float:
+            seen.append(attempt)
+            return 0
+
+        status = SpaStatus(host="192.0.2.10", port=4257, mode="configured_ip")
+        client = SpaClient(status)
+        with patch("asyncio.open_connection", open_connection), patch(
+            "app.client._backoff_delay", spy
+        ):
+            client.start()
+            for _ in range(400):
+                if seen and seen[-1] >= 1024:
+                    break
+                await asyncio.sleep(0.01)
+            await client.stop()
+        self.assertGreaterEqual(seen[-1], 1024)
+        self.assertGreater(calls, 1024)
+
+    async def test_close_error_does_not_end_retries(self) -> None:
+        calls = 0
+
+        async def open_connection(host, port):
+            nonlocal calls
+            calls += 1
+            raise OSError("refused")
+
+        status = SpaStatus(host="192.0.2.10", port=4257, mode="configured_ip")
+        client = SpaClient(status)
+
+        async def boom() -> None:
+            if calls == 1:
+                raise RuntimeError("close blew up")
+
+        client._close = boom  # type: ignore[method-assign]
+        with patch("asyncio.open_connection", open_connection), patch(
+            "app.client._backoff_delay", return_value=0
+        ):
+            client.start()
+            deadline = asyncio.get_running_loop().time() + 4
+            while asyncio.get_running_loop().time() < deadline:
+                if calls >= 3:
+                    break
+                await asyncio.sleep(0.05)
+            await client.stop()
+        self.assertGreaterEqual(calls, 3)
 
     async def test_mock_setpoint_moves_and_rejects_wrap(self) -> None:
         status = SpaStatus(
